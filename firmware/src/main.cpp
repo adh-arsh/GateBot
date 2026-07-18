@@ -24,6 +24,7 @@ WebServer server(80);
 int homeAngle = SERVO_HOME_ANGLE;
 int pressAngle = SERVO_PRESS_ANGLE;
 int currentAngle = SERVO_HOME_ANGLE;
+int pressHoldMs = PRESS_HOLD_MS;
 bool settingsFromNvs = false;
 bool sweepMode = false;
 bool pressBusy = false;
@@ -73,6 +74,7 @@ void detachServoIfIdle() {
 
 void persistAngles() {
   configStorageSaveAngles(homeAngle, pressAngle);
+  configStorageSavePressHold(pressHoldMs);
   configStorageSaveLastAngle(currentAngle);
   settingsFromNvs = true;
   angleDirty = false;
@@ -83,9 +85,11 @@ void resetToFactoryDefaults() {
   homeAngle = SERVO_HOME_ANGLE;
   pressAngle = SERVO_PRESS_ANGLE;
   currentAngle = SERVO_HOME_ANGLE;
+  pressHoldMs = PRESS_HOLD_MS;
   settingsFromNvs = false;
   angleDirty = false;
-  Serial.printf("[nvs] factory home=%d press=%d\n", homeAngle, pressAngle);
+  Serial.printf("[nvs] factory home=%d press=%d holdMs=%d\n",
+                homeAngle, pressAngle, pressHoldMs);
 }
 
 void moveServo(int angle) {
@@ -117,7 +121,7 @@ void servicePress() {
       pressStateMs = now;
       break;
     case PRESS_HOLD:
-      if (now - pressStateMs >= PRESS_HOLD_MS) {
+      if (now - pressStateMs >= (unsigned long)pressHoldMs) {
         pressState = PRESS_UP;
         moveServo(homeAngle);
         pressStateMs = now;
@@ -210,6 +214,7 @@ void printStatus() {
   }
   Serial.printf("  home angle : %d\n", homeAngle);
   Serial.printf("  press angle: %d\n", pressAngle);
+  Serial.printf("  press hold : %d ms\n", pressHoldMs);
   Serial.printf("  settings   : %s\n", settingsFromNvs ? "saved (NVS)" : "factory");
   Serial.printf("  free heap  : %u bytes\n", ESP.getFreeHeap());
   Serial.println("--------------------------------");
@@ -289,6 +294,7 @@ void setup() {
   homeAngle = saved.homeAngle;
   pressAngle = saved.pressAngle;
   currentAngle = saved.lastAngle;
+  pressHoldMs = saved.pressHoldMs;
   settingsFromNvs = saved.fromNvs;
 
   Serial.println();

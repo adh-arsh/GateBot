@@ -6,6 +6,7 @@
 extern int homeAngle;
 extern int pressAngle;
 extern int currentAngle;
+extern int pressHoldMs;
 extern bool pressBusy;
 extern bool settingsFromNvs;
 

@@ -78,6 +78,7 @@ String deviceStatusJson() {
   // Top-level angles for simple clients / admin UI
   doc["homeAngle"] = homeAngle;
   doc["pressAngle"] = pressAngle;
+  doc["pressHoldMs"] = pressHoldMs;
   doc["angle"] = currentAngle;
 
   JsonObject wifi = doc["wifi"].to<JsonObject>();
@@ -104,9 +105,10 @@ String deviceStatusJson() {
   doc["servo"]["angle"] = currentAngle;
   doc["servo"]["homeAngle"] = homeAngle;
   doc["servo"]["pressAngle"] = pressAngle;
-  doc["servo"]["pressHoldMs"] = PRESS_HOLD_MS;
+  doc["servo"]["pressHoldMs"] = pressHoldMs;
   doc["factory"]["homeAngle"] = SERVO_HOME_ANGLE;
   doc["factory"]["pressAngle"] = SERVO_PRESS_ANGLE;
+  doc["factory"]["pressHoldMs"] = PRESS_HOLD_MS;
   String out;
   serializeJson(doc, out);
   return out;
@@ -246,6 +248,7 @@ static void handleGetConfig() {
   doc["ok"] = true;
   doc["homeAngle"] = homeAngle;
   doc["pressAngle"] = pressAngle;
+  doc["pressHoldMs"] = pressHoldMs;
   doc["angle"] = currentAngle;
   doc["persisted"] = settingsFromNvs;
   String out;
@@ -273,6 +276,15 @@ static bool applyConfigFromDoc(JsonDocument& doc, String& err) {
     pressAngle = v;
     changed = true;
   }
+  if (!doc["pressHoldMs"].isNull()) {
+    int v = doc["pressHoldMs"].as<int>();
+    if (v < PRESS_HOLD_MS_MIN || v > PRESS_HOLD_MS_MAX) {
+      err = "pressHoldMs must be 10-10000";
+      return false;
+    }
+    pressHoldMs = v;
+    changed = true;
+  }
   if (!doc["home"].isNull()) {
     homeAngle = constrain(doc["home"].as<int>(), 0, 180);
     changed = true;
@@ -282,7 +294,7 @@ static bool applyConfigFromDoc(JsonDocument& doc, String& err) {
     changed = true;
   }
   if (!changed) {
-    err = "expected homeAngle and/or pressAngle";
+    err = "expected homeAngle, pressAngle, and/or pressHoldMs";
     return false;
   }
   return true;
@@ -299,9 +311,11 @@ static void handlePutConfig() {
       return;
     }
   } else if (apiServer->hasArg("homeAngle") || apiServer->hasArg("pressAngle") ||
+             apiServer->hasArg("pressHoldMs") ||
              apiServer->hasArg("home") || apiServer->hasArg("press")) {
     if (apiServer->hasArg("homeAngle")) doc["homeAngle"] = apiServer->arg("homeAngle").toInt();
     if (apiServer->hasArg("pressAngle")) doc["pressAngle"] = apiServer->arg("pressAngle").toInt();
+    if (apiServer->hasArg("pressHoldMs")) doc["pressHoldMs"] = apiServer->arg("pressHoldMs").toInt();
     if (apiServer->hasArg("home")) doc["home"] = apiServer->arg("home").toInt();
     if (apiServer->hasArg("press")) doc["press"] = apiServer->arg("press").toInt();
   } else {
@@ -314,7 +328,8 @@ static void handlePutConfig() {
     return;
   }
 
-  Serial.printf("[api] config homeAngle=%d pressAngle=%d\n", homeAngle, pressAngle);
+  Serial.printf("[api] config homeAngle=%d pressAngle=%d pressHoldMs=%d\n",
+                homeAngle, pressAngle, pressHoldMs);
   if (!doc["homeAngle"].isNull() || !doc["home"].isNull()) {
     moveServo(homeAngle);
   }
@@ -324,6 +339,7 @@ static void handlePutConfig() {
   out["ok"] = true;
   out["homeAngle"] = homeAngle;
   out["pressAngle"] = pressAngle;
+  out["pressHoldMs"] = pressHoldMs;
   out["angle"] = currentAngle;
   out["persisted"] = settingsFromNvs;
   String body;
@@ -339,6 +355,7 @@ static void handleDeleteConfig() {
   out["action"] = "reset";
   out["homeAngle"] = homeAngle;
   out["pressAngle"] = pressAngle;
+  out["pressHoldMs"] = pressHoldMs;
   out["angle"] = currentAngle;
   out["persisted"] = settingsFromNvs;
   String body;

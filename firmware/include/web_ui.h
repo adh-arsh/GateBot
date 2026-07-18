@@ -317,6 +317,10 @@ static const char ADMIN_HTML[] PROGMEM = R"HTML(
       <label>Press angle <span class="val" id="pressVal">—</span></label>
       <input type="range" id="press" min="0" max="180" value="170"/>
     </div>
+    <div class="field">
+      <label>Press hold <span class="val" id="holdVal">—</span></label>
+      <input type="range" id="hold" min="10" max="10000" step="10" value="300"/>
+    </div>
 
     <h2>Network</h2>
     <p class="note" id="wifiNote">Choose AP (share link) or Wi‑Fi (internet / WebSocket-ready).</p>
@@ -401,8 +405,10 @@ static const char ADMIN_HTML[] PROGMEM = R"HTML(
       btnCreatePin: document.getElementById('btnCreatePin'),
       home: document.getElementById('home'),
       press: document.getElementById('press'),
+      hold: document.getElementById('hold'),
       homeVal: document.getElementById('homeVal'),
       pressVal: document.getElementById('pressVal'),
+      holdVal: document.getElementById('holdVal'),
       angles: document.getElementById('angles'),
       persist: document.getElementById('persist'),
       conn: document.getElementById('conn'),
@@ -472,9 +478,14 @@ static const char ADMIN_HTML[] PROGMEM = R"HTML(
     function applyConfig(s) {
       const home = s.homeAngle ?? s.servo?.homeAngle;
       const press = s.pressAngle ?? s.servo?.pressAngle;
+      const hold = s.pressHoldMs ?? s.servo?.pressHoldMs;
       if (home != null) { els.home.value = home; els.homeVal.textContent = home + '°'; }
       if (press != null) { els.press.value = press; els.pressVal.textContent = press + '°'; }
-      if (home != null && press != null) els.angles.textContent = 'home ' + home + '° / press ' + press + '°';
+      if (hold != null) { els.hold.value = hold; els.holdVal.textContent = hold + ' ms'; }
+      if (home != null && press != null) {
+        els.angles.textContent = 'home ' + home + '° / press ' + press + '°' +
+          (hold != null ? ' · hold ' + hold + ' ms' : '');
+      }
       if (s.persisted === true) els.persist.textContent = 'Saved in flash — survives power-off';
       else if (s.persisted === false) els.persist.textContent = 'Factory defaults (not saved yet)';
     }
@@ -603,10 +614,12 @@ static const char ADMIN_HTML[] PROGMEM = R"HTML(
     async function saveConfig() {
       const homeAngle = Number(els.home.value);
       const pressAngle = Number(els.press.value);
+      const pressHoldMs = Number(els.hold.value);
       els.homeVal.textContent = homeAngle + '°';
       els.pressVal.textContent = pressAngle + '°';
+      els.holdVal.textContent = pressHoldMs + ' ms';
       try {
-        const s = await GateBotAPI.setConfig({ homeAngle, pressAngle });
+        const s = await GateBotAPI.setConfig({ homeAngle, pressAngle, pressHoldMs });
         applyConfig(s);
         setMsg('Saved to flash', 'ok');
       } catch (e) { setMsg(e.message, 'err'); }
@@ -659,8 +672,10 @@ static const char ADMIN_HTML[] PROGMEM = R"HTML(
     });
     els.home.addEventListener('input', () => { els.homeVal.textContent = els.home.value + '°'; });
     els.press.addEventListener('input', () => { els.pressVal.textContent = els.press.value + '°'; });
+    els.hold.addEventListener('input', () => { els.holdVal.textContent = els.hold.value + ' ms'; });
     els.home.addEventListener('change', saveConfig);
     els.press.addEventListener('change', saveConfig);
+    els.hold.addEventListener('change', saveConfig);
 
     (async () => {
       try {
