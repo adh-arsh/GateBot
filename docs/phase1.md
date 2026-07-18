@@ -16,7 +16,9 @@ This phase proves the mechanical press works without home Wi‑Fi. The ESP32 run
 | Press angle | Tunable (factory fallback **170°**; **saved in flash**) |
 | SoftAP SSID | `GateBot` |
 | SoftAP password | `Star@918` |
-| Control URL | http://192.168.4.1 |
+| Public unlock | http://192.168.4.1/ (6-digit PIN) |
+| Admin | http://192.168.4.1/admin |
+| Admin login | `r.adharsh@kalpataruprojects.com` / `Star@918` |
 | API base | http://192.168.4.1/api/v1 |
 
 Defaults / factory fallbacks live in `firmware/include/config.h`. Once you change angles on the web UI (or via API), they are stored in ESP32 NVS flash and restored after power-off. Use **Reset to factory angles** (or `DELETE /api/v1/config`) to wipe saved values.
@@ -77,11 +79,15 @@ Firmware mitigations (still use a solid 5V adapter):
 
 1. Plug the ESP32 into the wall USB adapter.  
 2. On your phone, join Wi‑Fi **GateBot** / **Star@918**.  
-3. Open **http://192.168.4.1**.  
-4. Tap **Open Gate** (calls `POST /api/v1/gate/open`).  
-5. Adjust sliders only if remounting changes alignment (`PUT /api/v1/config`).
+3. **Visitors:** open **http://192.168.4.1/** and enter a 6-digit PIN to open the gate.  
+4. **Admin:** open **http://192.168.4.1/admin**, sign in, then:
+   - Adjust home/press angles (saved to flash)
+   - Create / delete access PINs
+   - Use **Open Gate** for a manual press  
 
-Serial (115200) still works while USB-serial is connected: `p`, `h`, `home=40`, `press=170`, `status`.
+Full admin + PIN docs: [`admin-pin.md`](./admin-pin.md).
+
+Serial (115200) still works while USB-serial is connected: `p`, `h`, `home=N`, `press=N`, `status`, `resetcfg`.
 
 ## Build & flash
 
@@ -95,23 +101,26 @@ Data-capable USB cable required for flashing. After flashing, you can run from t
 
 ## API (reusable later on home Wi‑Fi)
 
-See [`api-v1.md`](./api-v1.md). Summary:
+See [`api-v1.md`](./api-v1.md) and [`admin-pin.md`](./admin-pin.md). Summary:
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/v1/status` | Device + servo state |
-| POST | `/api/v1/gate/open` | Press sequence |
-| POST | `/api/v1/gate/home` | Move to home |
-| PUT | `/api/v1/config` | `{ "homeAngle": 40, "pressAngle": 170 }` |
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| POST | `/api/v1/unlock` | public | `{ "pin": "123456" }` → open gate |
+| POST | `/api/v1/admin/login` | public | Admin session cookie |
+| GET | `/api/v1/status` | admin | Device + servo state |
+| POST | `/api/v1/gate/open` | admin | Press sequence |
+| PUT | `/api/v1/config` | admin | Save angles to flash |
+| GET/POST/DELETE | `/api/v1/pins` | admin | Manage access PINs |
 
 ## Checklist
 
 - [x] ESP32 powers from wall USB adapter  
 - [x] SoftAP `GateBot` visible and stable  
-- [x] Control page loads at http://192.168.4.1  
+- [x] Public PIN page at http://192.168.4.1/  
+- [x] Admin panel at http://192.168.4.1/admin  
+- [x] PIN create/unlock works; invalid PIN rejected  
 - [x] Servo moves only on command (not continuously)  
-- [x] Home **40°** / press **170°** calibrated  
-- [x] Press returns to home cleanly  
+- [x] Angles + PINs persist across power-off  
 - [x] Survives unplug / replug on wall power  
 
 ## What’s next

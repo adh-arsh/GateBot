@@ -12,6 +12,8 @@
 #include "soc/rtc_cntl_reg.h"
 #include "config.h"
 #include "config_storage.h"
+#include "pin_storage.h"
+#include "auth.h"
 #include "web_ui.h"
 #include "api.h"
 
@@ -138,7 +140,15 @@ void servicePress() {
 }
 
 void handleRoot() {
-  server.send_P(200, "text/html", INDEX_HTML);
+  server.send_P(200, "text/html", PIN_HTML);
+}
+
+void handleAdminPage() {
+  if (authIsLoggedIn(server)) {
+    server.send_P(200, "text/html", ADMIN_HTML);
+  } else {
+    server.send_P(200, "text/html", ADMIN_LOGIN_HTML);
+  }
 }
 
 void handleNotFound() {
@@ -147,11 +157,15 @@ void handleNotFound() {
 }
 
 void setupWebServer() {
+  const char* collect[] = {"Cookie"};
+  server.collectHeaders(collect, 1);
+
   server.on("/", HTTP_GET, handleRoot);
+  server.on("/admin", HTTP_GET, handleAdminPage);
   setupApiRoutes(server);
   server.onNotFound(handleNotFound);
   server.begin();
-  Serial.println("[http] server on :80");
+  Serial.println("[http] / = PIN unlock · /admin = settings");
 }
 
 void setupAccessPoint() {
@@ -193,8 +207,8 @@ void printStatus() {
 void printHelp() {
   Serial.println();
   Serial.println("Serial: h | p | s | home=N | press=N | status | resetcfg | help");
-  Serial.println("Web UI: GateBot Wi‑Fi → http://192.168.4.1");
-  Serial.println("Angles persist across power-off (NVS flash).");
+  Serial.println("Public: http://192.168.4.1/          (PIN unlock)");
+  Serial.println("Admin:  http://192.168.4.1/admin     (settings + PINs)");
   Serial.println();
 }
 
@@ -257,6 +271,8 @@ void setup() {
   pinMode(SERVO_PIN, INPUT);
 
   configStorageBegin();
+  pinStorageBegin();
+  authBegin();
   GateBotSettings saved = configStorageLoad();
   homeAngle = saved.homeAngle;
   pressAngle = saved.pressAngle;
@@ -265,7 +281,7 @@ void setup() {
 
   Serial.println();
   Serial.println("====================================");
-  Serial.println("  GateBot — SoftAP + saved settings");
+  Serial.println("  GateBot — PIN unlock + admin");
   Serial.println("====================================");
 
   setupAccessPoint();
@@ -280,7 +296,8 @@ void setup() {
 
   printStatus();
   printHelp();
-  Serial.println("[boot] ready — last angles restored from flash if present");
+  Serial.printf("[boot] pins=%d  admin=/admin\n", pinStorageCount());
+  Serial.println("[boot] ready");
 }
 
 void loop() {

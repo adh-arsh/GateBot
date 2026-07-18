@@ -1,53 +1,43 @@
 # GateBot API v1
 
-Same JSON API on SoftAP today and on home Wi‑Fi / React later.
-
 **Base URL (SoftAP):** `http://192.168.4.1/api/v1`
 
-## Endpoints
+## Public endpoints
 
 | Method | Path | Body | Description |
 |--------|------|------|-------------|
-| GET | `/api/v1` | — | List endpoints |
 | GET | `/api/v1/health` | — | Liveness |
-| GET | `/api/v1/status` | — | Full device + servo state |
-| GET | `/api/v1/config` | — | `{ homeAngle, pressAngle, angle }` |
-| PUT | `/api/v1/config` | `{ "homeAngle": 40, "pressAngle": 170 }` | Update + **save to flash** |
-| DELETE | `/api/v1/config` | — | Clear saved settings → factory defaults |
+| POST | `/api/v1/unlock` | `{ "pin": "123456" }` | Open gate if PIN matches |
+| POST | `/api/v1/admin/login` | `{ "email", "password" }` | Set session cookie |
+
+Wrong PIN → `401`. After 5 failures → `429` lockout for 30s.
+
+## Admin endpoints (session cookie required)
+
+Login at **http://192.168.4.1/admin** then call with `credentials: 'include'`.
+
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| GET | `/api/v1/admin/me` | — | Confirm session |
+| POST | `/api/v1/admin/logout` | — | Clear session |
+| GET | `/api/v1/status` | — | Device + servo state |
+| GET | `/api/v1/config` | — | Angles |
+| PUT | `/api/v1/config` | `{ "homeAngle", "pressAngle" }` | Update + save to flash |
+| DELETE | `/api/v1/config` | — | Factory angle defaults |
 | POST | `/api/v1/gate/open` | — | Press sequence |
-| POST | `/api/v1/gate/home` | — | Move to home |
-| POST | `/api/v1/servo/angle` | `{ "angle": 85 }` | Absolute move 0–180 |
+| POST | `/api/v1/gate/home` | — | Move home |
+| POST | `/api/v1/servo/angle` | `{ "angle": 0-180 }` | Absolute move |
+| GET | `/api/v1/pins` | — | List PINs (id, label; no secrets) |
+| POST | `/api/v1/pins` | `{ "pin": "123456", "label": "guest" }` | Create (returns PIN once) |
+| DELETE | `/api/v1/pins?id=N` | — | Delete PIN |
 
-Success responses include `"ok": true`. Config/status also include `"persisted": true|false` (whether values came from flash).
+Success responses include `"ok": true`. Config/status include `"persisted": true|false`.
 
-Angles are stored in ESP32 NVS and survive power-off. Factory fallbacks are in `firmware/include/config.h`.
+PINs are stored as SHA-256 hashes in NVS (max 10). Admin session is in RAM (cleared on reboot).
 
-CORS is enabled (`*`) so a future dashboard on another origin can call the device directly during local testing.
+## Pages
 
-## Examples
-
-```bash
-# Status
-curl http://192.168.4.1/api/v1/status
-
-# Open gate
-curl -X POST http://192.168.4.1/api/v1/gate/open
-
-# Set angles
-curl -X PUT http://192.168.4.1/api/v1/config \
-  -H 'Content-Type: application/json' \
-  -d '{"homeAngle":90,"pressAngle":70}'
-```
-
-## Browser client
-
-The SoftAP page exposes `window.GateBotAPI`:
-
-```js
-await GateBotAPI.openGate()
-await GateBotAPI.setConfig({ homeAngle: 90, pressAngle: 68 })
-await GateBotAPI.status()
-
-// Later on home Wi‑Fi / backend proxy:
-GateBotAPI.baseUrl = 'http://192.168.1.50'  // or ''
-```
+| URL | Purpose |
+|-----|---------|
+| `/` | Public 6-digit PIN keypad |
+| `/admin` | Login, then GateBot settings + PIN manager |

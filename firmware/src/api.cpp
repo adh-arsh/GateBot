@@ -1,30 +1,28 @@
 /**
  * GateBot HTTP API v1
  *
- * Stable JSON contract — SoftAP today, same paths on home Wi‑Fi / React later.
- *
- *   GET  /api/v1              API index
- *   GET  /api/v1/health       Liveness
- *   GET  /api/v1/status       Full device status
- *   GET  /api/v1/config       Servo config
- *   PUT  /api/v1/config       Update config (JSON body or query)
- *   POST /api/v1/gate/open    Run press sequence
- *   POST /api/v1/gate/home    Move to home angle
- *   POST /api/v1/servo/angle  Move to absolute angle { "angle": 0-180 }
+ * Public:  health, unlock, admin/login
+ * Admin:   status, config, gate, servo, pins, admin/me|logout
  */
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include "api.h"
+#include "auth.h"
 #include "config.h"
+#include "pin_storage.h"
 
 static WebServer* apiServer = nullptr;
 
+static uint8_t unlockFailCount = 0;
+static unsigned long unlockLockUntilMs = 0;
+
 static void sendJson(int code, const String& body) {
   apiServer->sendHeader("Access-Control-Allow-Origin", "*");
-  apiServer->sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+  apiServer->sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   apiServer->sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  apiServer->sendHeader("Access-Control-Allow-Credentials", "true");
   apiServer->send(code, "application/json", body);
 }
 
@@ -37,16 +35,45 @@ static void sendError(int code, const char* message) {
   sendJson(code, out);
 }
 
+static bool parseJsonBody(JsonDocument& doc) {
+  if (apiServer->hasArg("plain") && apiServer->arg("plain").length() > 0) {
+    return !deserializeJson(doc, apiServer->arg("plain"));
+  }
+  return false;
+}
+
+static void runPressAndRespond(const char* action) {
+  if (pressBusy) {
+    sendError(409, "busy");
+    return;
+  }
+  startPress();
+  while (pressBusy) {
+    servicePress();
+    delay(1);
+  }
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["action"] = action;
+  doc["homeAngle"] = homeAngle;
+  doc["pressAngle"] = pressAngle;
+  doc["angle"] = currentAngle;
+  String out;
+  serializeJson(doc, out);
+  sendJson(200, out);
+}
+
 String deviceStatusJson() {
   JsonDocument doc;
   doc["ok"] = true;
   doc["device"] = "gatebot";
-  doc["firmware"] = "2.1.0-local";
+  doc["firmware"] = "2.2.0-local";
   doc["mode"] = "softap";
   doc["ssid"] = AP_SSID;
   doc["ip"] = WiFi.softAPIP().toString();
   doc["busy"] = pressBusy;
   doc["persisted"] = settingsFromNvs;
+  doc["pinCount"] = pinStorageCount();
   doc["servo"]["pin"] = SERVO_PIN;
   doc["servo"]["angle"] = currentAngle;
   doc["servo"]["homeAngle"] = homeAngle;
@@ -61,8 +88,9 @@ String deviceStatusJson() {
 
 static void handleOptions() {
   apiServer->sendHeader("Access-Control-Allow-Origin", "*");
-  apiServer->sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+  apiServer->sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   apiServer->sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  apiServer->sendHeader("Access-Control-Allow-Credentials", "true");
   apiServer->send(204);
 }
 
@@ -73,13 +101,17 @@ static void handleApiIndex() {
   doc["version"] = "v1";
   JsonArray endpoints = doc["endpoints"].to<JsonArray>();
   endpoints.add("GET /api/v1/health");
+  endpoints.add("POST /api/v1/unlock");
+  endpoints.add("POST /api/v1/admin/login");
+  endpoints.add("POST /api/v1/admin/logout");
+  endpoints.add("GET /api/v1/admin/me");
   endpoints.add("GET /api/v1/status");
-  endpoints.add("GET /api/v1/config");
-  endpoints.add("PUT /api/v1/config");
-  endpoints.add("DELETE /api/v1/config");
+  endpoints.add("GET|PUT|DELETE /api/v1/config");
   endpoints.add("POST /api/v1/gate/open");
   endpoints.add("POST /api/v1/gate/home");
   endpoints.add("POST /api/v1/servo/angle");
+  endpoints.add("GET|POST /api/v1/pins");
+  endpoints.add("DELETE /api/v1/pins?id=N");
   String out;
   serializeJson(doc, out);
   sendJson(200, out);
@@ -95,11 +127,91 @@ static void handleHealth() {
   sendJson(200, out);
 }
 
+static void handleUnlock() {
+  unsigned long now = millis();
+  if (now < unlockLockUntilMs) {
+    sendError(429, "too many attempts — try again shortly");
+    return;
+  }
+
+  JsonDocument doc;
+  if (!parseJsonBody(doc) && !apiServer->hasArg("pin")) {
+    sendError(400, "JSON body {\"pin\":\"######\"} required");
+    return;
+  }
+  String pin;
+  if (!doc["pin"].isNull()) pin = doc["pin"].as<String>();
+  else pin = apiServer->arg("pin");
+  pin.trim();
+
+  if (pin.length() != PIN_LENGTH) {
+    sendError(400, "pin must be 6 digits");
+    return;
+  }
+
+  if (!pinStorageVerify(pin.c_str())) {
+    unlockFailCount++;
+    if (unlockFailCount >= PIN_FAIL_LIMIT) {
+      unlockLockUntilMs = now + PIN_LOCKOUT_MS;
+      unlockFailCount = 0;
+      Serial.println("[unlock] lockout started");
+      sendError(429, "too many attempts — locked for 30s");
+      return;
+    }
+    sendError(401, "invalid pin");
+    return;
+  }
+
+  unlockFailCount = 0;
+  Serial.println("[unlock] PIN ok — opening gate");
+  runPressAndRespond("unlock");
+}
+
+static void handleAdminLogin() {
+  JsonDocument doc;
+  if (!parseJsonBody(doc)) {
+    sendError(400, "JSON body required");
+    return;
+  }
+  String email = doc["email"] | "";
+  String password = doc["password"] | "";
+  email.trim();
+  if (!authCheckCredentials(email, password)) {
+    sendError(401, "invalid credentials");
+    return;
+  }
+  authIssueSession(*apiServer);
+  JsonDocument out;
+  out["ok"] = true;
+  out["email"] = ADMIN_EMAIL;
+  String body;
+  serializeJson(out, body);
+  sendJson(200, body);
+}
+
+static void handleAdminLogout() {
+  if (!requireAuth(*apiServer)) return;
+  authClearSession(*apiServer);
+  sendJson(200, "{\"ok\":true}");
+}
+
+static void handleAdminMe() {
+  if (!requireAuth(*apiServer)) return;
+  JsonDocument out;
+  out["ok"] = true;
+  out["email"] = ADMIN_EMAIL;
+  String body;
+  serializeJson(out, body);
+  sendJson(200, body);
+}
+
 static void handleStatus() {
+  if (!requireAuth(*apiServer)) return;
   sendJson(200, deviceStatusJson());
 }
 
 static void handleGetConfig() {
+  if (!requireAuth(*apiServer)) return;
   JsonDocument doc;
   doc["ok"] = true;
   doc["homeAngle"] = homeAngle;
@@ -131,7 +243,6 @@ static bool applyConfigFromDoc(JsonDocument& doc, String& err) {
     pressAngle = v;
     changed = true;
   }
-  // Accept short aliases used by simple clients
   if (!doc["home"].isNull()) {
     homeAngle = constrain(doc["home"].as<int>(), 0, 180);
     changed = true;
@@ -148,13 +259,12 @@ static bool applyConfigFromDoc(JsonDocument& doc, String& err) {
 }
 
 static void handlePutConfig() {
+  if (!requireAuth(*apiServer)) return;
   JsonDocument doc;
   String err;
 
-  // Prefer JSON body; fall back to query params for easy curl/testing
   if (apiServer->hasArg("plain") && apiServer->arg("plain").length() > 0) {
-    DeserializationError e = deserializeJson(doc, apiServer->arg("plain"));
-    if (e) {
+    if (deserializeJson(doc, apiServer->arg("plain"))) {
       sendError(400, "invalid JSON body");
       return;
     }
@@ -192,6 +302,7 @@ static void handlePutConfig() {
 }
 
 static void handleDeleteConfig() {
+  if (!requireAuth(*apiServer)) return;
   resetToFactoryDefaults();
   JsonDocument out;
   out["ok"] = true;
@@ -206,28 +317,12 @@ static void handleDeleteConfig() {
 }
 
 static void handleGateOpen() {
-  if (pressBusy) {
-    sendError(409, "busy");
-    return;
-  }
-  startPress();
-  while (pressBusy) {
-    servicePress();
-    delay(1);
-  }
-
-  JsonDocument doc;
-  doc["ok"] = true;
-  doc["action"] = "open";
-  doc["homeAngle"] = homeAngle;
-  doc["pressAngle"] = pressAngle;
-  doc["angle"] = currentAngle;
-  String out;
-  serializeJson(doc, out);
-  sendJson(200, out);
+  if (!requireAuth(*apiServer)) return;
+  runPressAndRespond("open");
 }
 
 static void handleGateHome() {
+  if (!requireAuth(*apiServer)) return;
   moveServo(homeAngle);
   JsonDocument doc;
   doc["ok"] = true;
@@ -240,6 +335,7 @@ static void handleGateHome() {
 }
 
 static void handleServoAngle() {
+  if (!requireAuth(*apiServer)) return;
   JsonDocument doc;
   int angle = -1;
 
@@ -268,6 +364,71 @@ static void handleServoAngle() {
   sendJson(200, body);
 }
 
+static void handleListPins() {
+  if (!requireAuth(*apiServer)) return;
+  PinEntry entries[PIN_MAX_COUNT];
+  int count = 0;
+  pinStorageList(entries, PIN_MAX_COUNT, &count);
+
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["count"] = count;
+  doc["max"] = PIN_MAX_COUNT;
+  JsonArray arr = doc["pins"].to<JsonArray>();
+  for (int i = 0; i < count; i++) {
+    JsonObject o = arr.add<JsonObject>();
+    o["id"] = entries[i].id;
+    o["label"] = entries[i].label;
+    o["createdAt"] = entries[i].createdAt;
+  }
+  String out;
+  serializeJson(doc, out);
+  sendJson(200, out);
+}
+
+static void handleCreatePin() {
+  if (!requireAuth(*apiServer)) return;
+  JsonDocument doc;
+  if (!parseJsonBody(doc)) {
+    sendError(400, "JSON body {\"pin\":\"######\",\"label\":\"...\"} required");
+    return;
+  }
+  String pin = doc["pin"] | "";
+  String label = doc["label"] | "";
+  pin.trim();
+  label.trim();
+
+  char err[64];
+  int id = pinStorageCreate(pin.c_str(), label.c_str(), err, sizeof(err));
+  if (id < 0) {
+    sendError(400, err);
+    return;
+  }
+
+  JsonDocument out;
+  out["ok"] = true;
+  out["id"] = id;
+  out["label"] = label.length() ? label : ("PIN " + String(id));
+  out["pin"] = pin;  // shown once at create
+  String body;
+  serializeJson(out, body);
+  sendJson(201, body);
+}
+
+static void handleDeletePin() {
+  if (!requireAuth(*apiServer)) return;
+  if (!apiServer->hasArg("id")) {
+    sendError(400, "id query param required");
+    return;
+  }
+  int id = apiServer->arg("id").toInt();
+  if (id < 0 || id >= PIN_MAX_COUNT || !pinStorageDelete((uint8_t)id)) {
+    sendError(404, "pin not found");
+    return;
+  }
+  sendJson(200, "{\"ok\":true}");
+}
+
 void setupApiRoutes(WebServer& server) {
   apiServer = &server;
 
@@ -279,24 +440,36 @@ void setupApiRoutes(WebServer& server) {
   server.on("/api/v1/health", HTTP_GET, handleHealth);
   server.on("/api/v1/health", HTTP_OPTIONS, opt);
 
+  server.on("/api/v1/unlock", HTTP_POST, handleUnlock);
+  server.on("/api/v1/unlock", HTTP_OPTIONS, opt);
+
+  server.on("/api/v1/admin/login", HTTP_POST, handleAdminLogin);
+  server.on("/api/v1/admin/login", HTTP_OPTIONS, opt);
+  server.on("/api/v1/admin/logout", HTTP_POST, handleAdminLogout);
+  server.on("/api/v1/admin/logout", HTTP_OPTIONS, opt);
+  server.on("/api/v1/admin/me", HTTP_GET, handleAdminMe);
+  server.on("/api/v1/admin/me", HTTP_OPTIONS, opt);
+
   server.on("/api/v1/status", HTTP_GET, handleStatus);
   server.on("/api/v1/status", HTTP_OPTIONS, opt);
 
   server.on("/api/v1/config", HTTP_GET, handleGetConfig);
   server.on("/api/v1/config", HTTP_PUT, handlePutConfig);
-  server.on("/api/v1/config", HTTP_POST, handlePutConfig);  // alias for simple clients
+  server.on("/api/v1/config", HTTP_POST, handlePutConfig);
   server.on("/api/v1/config", HTTP_DELETE, handleDeleteConfig);
   server.on("/api/v1/config", HTTP_OPTIONS, opt);
 
   server.on("/api/v1/gate/open", HTTP_POST, handleGateOpen);
-  server.on("/api/v1/gate/open", HTTP_GET, handleGateOpen);  // browser-friendly test
   server.on("/api/v1/gate/open", HTTP_OPTIONS, opt);
 
   server.on("/api/v1/gate/home", HTTP_POST, handleGateHome);
-  server.on("/api/v1/gate/home", HTTP_GET, handleGateHome);
   server.on("/api/v1/gate/home", HTTP_OPTIONS, opt);
 
   server.on("/api/v1/servo/angle", HTTP_POST, handleServoAngle);
-  server.on("/api/v1/servo/angle", HTTP_GET, handleServoAngle);
   server.on("/api/v1/servo/angle", HTTP_OPTIONS, opt);
+
+  server.on("/api/v1/pins", HTTP_GET, handleListPins);
+  server.on("/api/v1/pins", HTTP_POST, handleCreatePin);
+  server.on("/api/v1/pins", HTTP_DELETE, handleDeletePin);
+  server.on("/api/v1/pins", HTTP_OPTIONS, opt);
 }
