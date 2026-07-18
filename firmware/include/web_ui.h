@@ -539,6 +539,8 @@ static const char ADMIN_HTML[] PROGMEM = R"HTML(
           els.btnModeAp.classList.remove('on');
           els.btnModeSta.classList.add('on');
         }
+      } catch (e) { setMsg(e.message, 'err'); }
+    }
 
     async function scanWifi() {
       setMsg('Scanning…');

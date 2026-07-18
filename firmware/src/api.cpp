@@ -68,20 +68,37 @@ String deviceStatusJson() {
   JsonDocument doc;
   doc["ok"] = true;
   doc["device"] = "gatebot";
-  doc["firmware"] = "2.3.0-local";
+  doc["firmware"] = "2.3.1-local";
   doc["busy"] = pressBusy;
   doc["persisted"] = settingsFromNvs;
   doc["pinCount"] = pinStorageCount();
   doc["ip"] = wifiManagerIp();
   doc["shareUrl"] = wifiManagerShareUrl();
   doc["adminUrl"] = wifiManagerAdminUrl();
+  // Top-level angles for simple clients / admin UI
+  doc["homeAngle"] = homeAngle;
+  doc["pressAngle"] = pressAngle;
+  doc["angle"] = currentAngle;
 
-  // Nested wifi status
-  JsonDocument wifiDoc;
-  deserializeJson(wifiDoc, wifiManagerStatusJson());
-  doc["wifi"] = wifiDoc;
-  doc["mode"] = wifiDoc["mode"];
-  doc["ssid"] = wifiDoc["ssid"];
+  JsonObject wifi = doc["wifi"].to<JsonObject>();
+  const bool sta = wifiManagerIsStaConnected();
+  const bool wantSta = wifiManagerSavedMode() == GB_WIFI_STA;
+  wifi["mode"] = sta ? "sta" : "ap";
+  wifi["savedMode"] = wantSta ? "sta" : "ap";
+  wifi["connected"] = sta || wifiManagerIsApActive();
+  wifi["staConnected"] = sta;
+  wifi["ssid"] = sta ? WiFi.SSID() : String(AP_SSID);
+  wifi["staSsid"] = wifiManagerStaSsid();
+  wifi["ip"] = wifiManagerIp();
+  wifi["shareUrl"] = wifiManagerShareUrl();
+  wifi["adminUrl"] = wifiManagerAdminUrl();
+  wifi["apSsid"] = AP_SSID;
+  wifi["apPassword"] = AP_PASSWORD;
+  wifi["rssi"] = wifiManagerRssi();
+  wifi["fallback"] = wantSta && !sta;
+
+  doc["mode"] = wifi["mode"];
+  doc["ssid"] = wifi["ssid"];
 
   doc["servo"]["pin"] = SERVO_PIN;
   doc["servo"]["angle"] = currentAngle;
