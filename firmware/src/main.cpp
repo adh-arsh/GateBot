@@ -14,6 +14,7 @@
 #include "config_storage.h"
 #include "pin_storage.h"
 #include "auth.h"
+#include "wifi_manager.h"
 #include "web_ui.h"
 #include "api.h"
 
@@ -143,6 +144,12 @@ void handleRoot() {
   server.send_P(200, "text/html", PIN_HTML);
 }
 
+void handleCaptiveProbe() {
+  // Non-204 response → phone opens captive browser on the PIN page
+  server.sendHeader("Location", "http://192.168.4.1/", true);
+  server.send(302, "text/plain", "");
+}
+
 void handleAdminPage() {
   if (authIsLoggedIn(server)) {
     server.send_P(200, "text/html", ADMIN_HTML);
@@ -152,54 +159,58 @@ void handleAdminPage() {
 }
 
 void handleNotFound() {
+  // Captive portal: unknown host/path (except API) → PIN unlock page
+  if (wifiManagerIsApActive()) {
+    String uri = server.uri();
+    if (!uri.startsWith("/api/")) {
+      server.sendHeader("Location", "http://192.168.4.1/", true);
+      server.send(302, "text/plain", "");
+      return;
+    }
+  }
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.send(404, "application/json", "{\"ok\":false,\"error\":\"not found\"}");
 }
 
 void setupWebServer() {
-  const char* collect[] = {"Cookie"};
-  server.collectHeaders(collect, 1);
+  const char* collect[] = {"Cookie", "Host"};
+  server.collectHeaders(collect, 2);
 
   server.on("/", HTTP_GET, handleRoot);
+  server.on("/portal", HTTP_GET, handleRoot);  // same as PIN page
   server.on("/admin", HTTP_GET, handleAdminPage);
+
+  // Android / iOS / Windows captive portal probes → PIN unlock page
+  server.on("/generate_204", HTTP_GET, handleCaptiveProbe);
+  server.on("/gen_204", HTTP_GET, handleCaptiveProbe);
+  server.on("/hotspot-detect.html", HTTP_GET, handleRoot);
+  server.on("/library/test/success.html", HTTP_GET, handleRoot);
+  server.on("/ncsi.txt", HTTP_GET, handleCaptiveProbe);
+  server.on("/connecttest.txt", HTTP_GET, handleCaptiveProbe);
+  server.on("/canonical.html", HTTP_GET, handleRoot);
+  server.on("/success.txt", HTTP_GET, handleCaptiveProbe);
+  server.on("/fwlink/", HTTP_GET, handleCaptiveProbe);
+
   setupApiRoutes(server);
   server.onNotFound(handleNotFound);
   server.begin();
-  Serial.println("[http] / = PIN unlock · /admin = settings");
-}
-
-void setupAccessPoint() {
-  WiFi.persistent(false);
-  WiFi.mode(WIFI_OFF);
-  delay(100);
-  WiFi.mode(WIFI_AP);
-  WiFi.setSleep(false);
-
-  IPAddress apIP(192, 168, 4, 1);
-  IPAddress gateway(192, 168, 4, 1);
-  IPAddress subnet(255, 255, 255, 0);
-  WiFi.softAPConfig(apIP, gateway, subnet);
-
-  bool ok = WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL, false, AP_MAX_CLIENTS);
-  delay(200);
-
-  IPAddress ip = WiFi.softAPIP();
-  Serial.printf("[wifi] SoftAP %s  ssid=%s  pass=%s  ch=%d\n",
-                ok ? "OK" : "FAIL", AP_SSID, AP_PASSWORD, AP_CHANNEL);
-  Serial.printf("[wifi] UI  http://%s\n", ip.toString().c_str());
-  Serial.printf("[wifi] API http://%s/api/v1\n", ip.toString().c_str());
+  Serial.println("[http] captive → PIN unlock · /admin = settings");
 }
 
 void printStatus() {
   Serial.println("---------- GateBot ----------");
-  Serial.printf("  AP SSID    : %s\n", AP_SSID);
-  Serial.printf("  AP IP      : %s\n", WiFi.softAPIP().toString().c_str());
-  Serial.printf("  clients    : %d\n", WiFi.softAPgetStationNum());
+  Serial.printf("  wifi mode  : %s\n", wifiManagerIsStaConnected() ? "STA" : "AP");
+  Serial.printf("  IP         : %s\n", wifiManagerIp().c_str());
+  Serial.printf("  share URL  : %s\n", wifiManagerShareUrl().c_str());
+  Serial.printf("  admin URL  : %s\n", wifiManagerAdminUrl().c_str());
+  if (!wifiManagerIsStaConnected()) {
+    Serial.printf("  AP SSID    : %s\n", AP_SSID);
+  } else {
+    Serial.printf("  STA SSID   : %s  rssi=%d\n", wifiManagerStaSsid().c_str(), wifiManagerRssi());
+  }
   Serial.printf("  home angle : %d\n", homeAngle);
   Serial.printf("  press angle: %d\n", pressAngle);
-  Serial.printf("  last angle : %d\n", currentAngle);
   Serial.printf("  settings   : %s\n", settingsFromNvs ? "saved (NVS)" : "factory");
-  Serial.printf("  servo      : %s\n", servoAttached ? "attached" : "detached");
   Serial.printf("  free heap  : %u bytes\n", ESP.getFreeHeap());
   Serial.println("--------------------------------");
 }
@@ -207,8 +218,8 @@ void printStatus() {
 void printHelp() {
   Serial.println();
   Serial.println("Serial: h | p | s | home=N | press=N | status | resetcfg | help");
-  Serial.println("Public: http://192.168.4.1/          (PIN unlock)");
-  Serial.println("Admin:  http://192.168.4.1/admin     (settings + PINs)");
+  Serial.printf("Public: %s\n", wifiManagerShareUrl().c_str());
+  Serial.printf("Admin:  %s\n", wifiManagerAdminUrl().c_str());
   Serial.println();
 }
 
@@ -273,6 +284,7 @@ void setup() {
   configStorageBegin();
   pinStorageBegin();
   authBegin();
+  wifiManagerBegin();
   GateBotSettings saved = configStorageLoad();
   homeAngle = saved.homeAngle;
   pressAngle = saved.pressAngle;
@@ -281,10 +293,10 @@ void setup() {
 
   Serial.println();
   Serial.println("====================================");
-  Serial.println("  GateBot — PIN unlock + admin");
+  Serial.println("  GateBot — dual Wi-Fi + admin");
   Serial.println("====================================");
 
-  setupAccessPoint();
+  wifiManagerApplySaved();
   setupWebServer();
 
   for (int i = 0; i < 4; i++) {
@@ -296,16 +308,23 @@ void setup() {
 
   printStatus();
   printHelp();
-  Serial.printf("[boot] pins=%d  admin=/admin\n", pinStorageCount());
+  Serial.printf("[boot] pins=%d\n", pinStorageCount());
   Serial.println("[boot] ready");
 }
 
 void loop() {
+  wifiManagerProcessDns();
   server.handleClient();
   servicePress();
   detachServoIfIdle();
   blinkLed();
   pollSerial();
+
+  if (wifiManagerConsumeRebootRequest()) {
+    Serial.println("[wifi] rebooting to apply network…");
+    delay(500);
+    ESP.restart();
+  }
 
   if (sweepMode && !pressBusy) {
     unsigned long now = millis();

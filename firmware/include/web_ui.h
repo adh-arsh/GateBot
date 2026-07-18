@@ -268,6 +268,20 @@ static const char ADMIN_HTML[] PROGMEM = R"HTML(
       border:1px solid var(--line);background:var(--panel);font-family:var(--display);font-size:.85rem
     }
     .pin-row button{border:1px solid var(--line);background:transparent;color:var(--danger);padding:6px 10px;cursor:pointer}
+    .toggle{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
+    .toggle button{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:12px;cursor:pointer;font-size:.9rem}
+    .toggle button.on{border-color:var(--accent);color:var(--accent)}
+    .share{
+      font-family:var(--display);font-size:.85rem;padding:12px;border:1px solid var(--line);
+      background:var(--panel);word-break:break-all;margin-bottom:10px
+    }
+    .net-list{display:flex;flex-direction:column;gap:6px;max-height:220px;overflow:auto;margin:10px 0}
+    .net-row{
+      display:flex;justify-content:space-between;align-items:center;padding:10px 12px;
+      border:1px solid var(--line);background:var(--panel);cursor:pointer;font-family:var(--display);font-size:.8rem
+    }
+    .net-row.sel{border-color:var(--accent)}
+    .note{font-size:.8rem;color:var(--muted);margin:0 0 12px;line-height:1.4}
   </style>
 </head>
 <body>
@@ -302,6 +316,35 @@ static const char ADMIN_HTML[] PROGMEM = R"HTML(
     <div class="field">
       <label>Press angle <span class="val" id="pressVal">—</span></label>
       <input type="range" id="press" min="0" max="180" value="170"/>
+    </div>
+
+    <h2>Network</h2>
+    <p class="note" id="wifiNote">Choose AP (share link) or Wi‑Fi (internet / WebSocket-ready).</p>
+    <div class="toggle">
+      <button type="button" id="btnModeAp">AP · no internet</button>
+      <button type="button" id="btnModeSta">Wi‑Fi · internet</button>
+    </div>
+    <div id="panelAp">
+      <label>Share link (join GateBot Wi‑Fi first)</label>
+      <div class="share" id="shareUrl">http://192.168.4.1/</div>
+      <button class="btn" type="button" id="btnCopyShare" style="width:100%;margin-bottom:8px">Copy share link</button>
+    </div>
+    <div id="panelSta" style="display:none">
+      <div id="staConnected" style="display:none">
+        <label>Admin URL (same home Wi‑Fi)</label>
+        <div class="share" id="adminUrl">—</div>
+        <label>Public unlock URL</label>
+        <div class="share" id="unlockUrl">—</div>
+        <p class="meta" id="staMeta" style="margin-bottom:12px">—</p>
+      </div>
+      <button class="btn" type="button" id="btnScan" style="width:100%;margin-bottom:8px">Scan networks</button>
+      <div class="net-list" id="netList"></div>
+      <label>Selected SSID</label>
+      <input type="text" id="staSsid" placeholder="Network name" maxlength="32"/>
+      <label>Password</label>
+      <input type="password" id="staPass" placeholder="Wi‑Fi password" maxlength="64"/>
+      <button class="btn" type="button" id="btnConnect" style="width:100%">Connect &amp; reboot</button>
+      <p class="note">ESP32 is 2.4 GHz only. After connect, open the Admin URL on your home Wi‑Fi.</p>
     </div>
 
     <h2>Access PINs</h2>
@@ -340,7 +383,11 @@ static const char ADMIN_HTML[] PROGMEM = R"HTML(
       goHome() { return this.request('POST', '/gate/home'); },
       listPins() { return this.request('GET', '/pins'); },
       createPin(pin, label) { return this.request('POST', '/pins', { pin, label }); },
-      deletePin(id) { return this.request('DELETE', '/pins?id=' + id); }
+      deletePin(id) { return this.request('DELETE', '/pins?id=' + id); },
+      wifiStatus() { return this.request('GET', '/wifi/status'); },
+      wifiScan() { return this.request('GET', '/wifi/scan'); },
+      wifiMode(mode) { return this.request('PUT', '/wifi/mode', { mode }); },
+      wifiSta(ssid, password) { return this.request('PUT', '/wifi/sta', { ssid, password }); }
     };
     window.GateBotAPI = GateBotAPI;
 
@@ -362,8 +409,57 @@ static const char ADMIN_HTML[] PROGMEM = R"HTML(
       dot: document.getElementById('dot'),
       pinList: document.getElementById('pinList'),
       newPin: document.getElementById('newPin'),
-      newLabel: document.getElementById('newLabel')
+      newLabel: document.getElementById('newLabel'),
+      btnModeAp: document.getElementById('btnModeAp'),
+      btnModeSta: document.getElementById('btnModeSta'),
+      panelAp: document.getElementById('panelAp'),
+      panelSta: document.getElementById('panelSta'),
+      shareUrl: document.getElementById('shareUrl'),
+      adminUrl: document.getElementById('adminUrl'),
+      unlockUrl: document.getElementById('unlockUrl'),
+      staMeta: document.getElementById('staMeta'),
+      staConnected: document.getElementById('staConnected'),
+      netList: document.getElementById('netList'),
+      staSsid: document.getElementById('staSsid'),
+      staPass: document.getElementById('staPass'),
+      btnScan: document.getElementById('btnScan'),
+      btnConnect: document.getElementById('btnConnect'),
+      btnCopyShare: document.getElementById('btnCopyShare'),
+      wifiNote: document.getElementById('wifiNote')
     };
+
+    let uiMode = 'ap';
+
+    function setNetworkUi(w) {
+      const mode = w.mode || 'ap';
+      const saved = w.savedMode || mode;
+      uiMode = saved;
+      els.btnModeAp.classList.toggle('on', saved === 'ap');
+      els.btnModeSta.classList.toggle('on', saved === 'sta');
+      els.panelAp.style.display = saved === 'ap' ? 'block' : 'none';
+      els.panelSta.style.display = saved === 'sta' ? 'block' : 'none';
+      els.shareUrl.textContent = w.shareUrl || 'http://192.168.4.1/';
+      if (w.staConnected) {
+        els.staConnected.style.display = 'block';
+        els.adminUrl.textContent = w.adminUrl || ('http://' + w.ip + '/admin');
+        els.unlockUrl.textContent = w.shareUrl || ('http://' + w.ip + '/');
+        els.staMeta.textContent = (w.ssid || w.staSsid || '') + ' · ' + (w.rssi || 0) + ' dBm · ' + (w.ip || '');
+      } else {
+        els.staConnected.style.display = saved === 'sta' ? 'block' : 'none';
+        if (saved === 'sta' && w.fallback) {
+          els.adminUrl.textContent = 'Not on Wi‑Fi — SoftAP fallback active';
+          els.unlockUrl.textContent = w.shareUrl || 'http://192.168.4.1/';
+          els.staMeta.textContent = 'Saved SSID: ' + (w.staSsid || '—') + ' (join failed; using AP)';
+        }
+      }
+      if (w.fallback) {
+        els.wifiNote.textContent = 'STA failed — SoftAP fallback. Fix password or scan again.';
+      } else if (saved === 'ap') {
+        els.wifiNote.textContent = 'AP mode: share the link below. Guests join GateBot Wi‑Fi first.';
+      } else {
+        els.wifiNote.textContent = 'Wi‑Fi mode: device on home network (ready for future WebSocket).';
+      }
+    }
 
     function setMsg(text, kind) {
       els.msg.textContent = text;
@@ -414,6 +510,11 @@ static const char ADMIN_HTML[] PROGMEM = R"HTML(
       try {
         const s = await GateBotAPI.status();
         applyConfig(s);
+        if (s.wifi) setNetworkUi(s.wifi);
+        else {
+          const w = await GateBotAPI.wifiStatus();
+          setNetworkUi(w);
+        }
         await refreshPins();
         setOnline(true);
         setMsg(s.persisted ? 'Loaded saved angles' : 'Using factory defaults', 'ok');
@@ -421,6 +522,61 @@ static const char ADMIN_HTML[] PROGMEM = R"HTML(
         setOnline(false);
         setMsg(e.message, 'err');
       }
+    }
+
+    async function setMode(mode) {
+      try {
+        const r = await GateBotAPI.wifiMode(mode);
+        if (r.rebooting) {
+          setMsg('Rebooting into Wi‑Fi mode… reconnect on home network.', 'ok');
+          return;
+        }
+        setNetworkUi(Object.assign({}, r, { savedMode: mode, mode: r.mode || 'ap' }));
+        setMsg(r.message || (mode === 'ap' ? 'AP mode active' : 'Select a network to connect'), 'ok');
+        if (mode === 'sta') {
+          els.panelAp.style.display = 'none';
+          els.panelSta.style.display = 'block';
+          els.btnModeAp.classList.remove('on');
+          els.btnModeSta.classList.add('on');
+        }
+
+    async function scanWifi() {
+      setMsg('Scanning…');
+      try {
+        const data = await GateBotAPI.wifiScan();
+        els.netList.innerHTML = '';
+        const nets = data.networks || [];
+        if (!nets.length) {
+          els.netList.innerHTML = '<div class="meta">No networks found (2.4 GHz only)</div>';
+          setMsg('Scan complete', 'ok');
+          return;
+        }
+        nets.sort((a, b) => (b.rssi || 0) - (a.rssi || 0));
+        nets.forEach(n => {
+          const row = document.createElement('div');
+          row.className = 'net-row';
+          row.innerHTML = '<span>' + (n.ssid || '(hidden)') + '</span><span>' +
+            (n.rssi || 0) + ' dBm' + (n.secure ? ' · 🔒' : '') + '</span>';
+          row.onclick = () => {
+            document.querySelectorAll('.net-row').forEach(el => el.classList.remove('sel'));
+            row.classList.add('sel');
+            els.staSsid.value = n.ssid || '';
+          };
+          els.netList.appendChild(row);
+        });
+        setMsg('Found ' + nets.length + ' networks', 'ok');
+      } catch (e) { setMsg(e.message, 'err'); }
+    }
+
+    async function connectWifi() {
+      const ssid = els.staSsid.value.trim();
+      const password = els.staPass.value;
+      if (!ssid) { setMsg('Select or enter an SSID', 'err'); return; }
+      if (!confirm('Connect to "' + ssid + '" and reboot?')) return;
+      try {
+        await GateBotAPI.wifiSta(ssid, password);
+        setMsg('Saved. Rebooting… Then open Admin URL on your home Wi‑Fi.', 'ok');
+      } catch (e) { setMsg(e.message, 'err'); }
     }
 
     async function openGate() {
@@ -487,6 +643,18 @@ static const char ADMIN_HTML[] PROGMEM = R"HTML(
     els.btnReset.addEventListener('click', resetConfig);
     els.btnLogout.addEventListener('click', logout);
     els.btnCreatePin.addEventListener('click', createPin);
+    els.btnModeAp.addEventListener('click', () => setMode('ap'));
+    els.btnModeSta.addEventListener('click', () => setMode('sta'));
+    els.btnScan.addEventListener('click', scanWifi);
+    els.btnConnect.addEventListener('click', connectWifi);
+    els.btnCopyShare.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(els.shareUrl.textContent);
+        setMsg('Share link copied', 'ok');
+      } catch (_) {
+        setMsg(els.shareUrl.textContent, 'ok');
+      }
+    });
     els.home.addEventListener('input', () => { els.homeVal.textContent = els.home.value + '°'; });
     els.press.addEventListener('input', () => { els.pressVal.textContent = els.press.value + '°'; });
     els.home.addEventListener('change', saveConfig);

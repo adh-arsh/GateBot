@@ -12,6 +12,7 @@
 #include "auth.h"
 #include "config.h"
 #include "pin_storage.h"
+#include "wifi_manager.h"
 
 static WebServer* apiServer = nullptr;
 
@@ -67,13 +68,21 @@ String deviceStatusJson() {
   JsonDocument doc;
   doc["ok"] = true;
   doc["device"] = "gatebot";
-  doc["firmware"] = "2.2.0-local";
-  doc["mode"] = "softap";
-  doc["ssid"] = AP_SSID;
-  doc["ip"] = WiFi.softAPIP().toString();
+  doc["firmware"] = "2.3.0-local";
   doc["busy"] = pressBusy;
   doc["persisted"] = settingsFromNvs;
   doc["pinCount"] = pinStorageCount();
+  doc["ip"] = wifiManagerIp();
+  doc["shareUrl"] = wifiManagerShareUrl();
+  doc["adminUrl"] = wifiManagerAdminUrl();
+
+  // Nested wifi status
+  JsonDocument wifiDoc;
+  deserializeJson(wifiDoc, wifiManagerStatusJson());
+  doc["wifi"] = wifiDoc;
+  doc["mode"] = wifiDoc["mode"];
+  doc["ssid"] = wifiDoc["ssid"];
+
   doc["servo"]["pin"] = SERVO_PIN;
   doc["servo"]["angle"] = currentAngle;
   doc["servo"]["homeAngle"] = homeAngle;
@@ -112,6 +121,10 @@ static void handleApiIndex() {
   endpoints.add("POST /api/v1/servo/angle");
   endpoints.add("GET|POST /api/v1/pins");
   endpoints.add("DELETE /api/v1/pins?id=N");
+  endpoints.add("GET /api/v1/wifi/status");
+  endpoints.add("GET /api/v1/wifi/scan");
+  endpoints.add("PUT /api/v1/wifi/mode");
+  endpoints.add("PUT /api/v1/wifi/sta");
   String out;
   serializeJson(doc, out);
   sendJson(200, out);
@@ -429,6 +442,91 @@ static void handleDeletePin() {
   sendJson(200, "{\"ok\":true}");
 }
 
+static void handleWifiStatus() {
+  if (!requireAuth(*apiServer)) return;
+  JsonDocument doc;
+  deserializeJson(doc, wifiManagerStatusJson());
+  doc["ok"] = true;
+  String out;
+  serializeJson(doc, out);
+  sendJson(200, out);
+}
+
+static void handleWifiScan() {
+  if (!requireAuth(*apiServer)) return;
+  sendJson(200, wifiManagerScanJson());
+}
+
+static void handleWifiMode() {
+  if (!requireAuth(*apiServer)) return;
+  JsonDocument doc;
+  if (!parseJsonBody(doc)) {
+    sendError(400, "JSON body {\"mode\":\"ap\"|\"sta\"} required");
+    return;
+  }
+  String mode = doc["mode"] | "";
+  mode.toLowerCase();
+  if (mode == "ap") {
+    wifiManagerSaveMode(GB_WIFI_AP);
+    wifiManagerSetApMode();
+    JsonDocument out;
+    deserializeJson(out, wifiManagerStatusJson());
+    out["ok"] = true;
+    out["rebooting"] = false;
+    String body;
+    serializeJson(out, body);
+    sendJson(200, body);
+    return;
+  }
+  if (mode == "sta") {
+    wifiManagerSaveMode(GB_WIFI_STA);
+    JsonDocument st;
+    deserializeJson(st, wifiManagerStatusJson());
+    String ssid = st["staSsid"] | "";
+    if (ssid.length() == 0) {
+      JsonDocument out;
+      deserializeJson(out, wifiManagerStatusJson());
+      out["ok"] = true;
+      out["rebooting"] = false;
+      out["message"] = "Wi-Fi mode selected — scan and connect to a network";
+      String body;
+      serializeJson(out, body);
+      sendJson(200, body);
+      return;
+    }
+    sendJson(200, "{\"ok\":true,\"rebooting\":true,\"message\":\"Rebooting into Wi-Fi mode…\"}");
+    wifiManagerRequestReboot();
+    return;
+  }
+  sendError(400, "mode must be ap or sta");
+}
+
+static void handleWifiSta() {
+  if (!requireAuth(*apiServer)) return;
+  JsonDocument doc;
+  if (!parseJsonBody(doc)) {
+    sendError(400, "JSON body {\"ssid\",\"password\"} required");
+    return;
+  }
+  String ssid = doc["ssid"] | "";
+  String password = doc["password"] | "";
+  ssid.trim();
+  if (ssid.length() == 0 || ssid.length() > WIFI_SSID_MAX) {
+    sendError(400, "ssid required (max 32 chars)");
+    return;
+  }
+  if (password.length() > WIFI_PASS_MAX) {
+    sendError(400, "password too long");
+    return;
+  }
+
+  wifiManagerSaveSta(ssid.c_str(), password.c_str());
+  sendJson(200,
+           "{\"ok\":true,\"rebooting\":true,\"message\":\"Saved. Rebooting to join Wi-Fi. "
+           "Open admin on your home network using the new IP.\"}");
+  wifiManagerRequestReboot();
+}
+
 void setupApiRoutes(WebServer& server) {
   apiServer = &server;
 
@@ -472,4 +570,15 @@ void setupApiRoutes(WebServer& server) {
   server.on("/api/v1/pins", HTTP_POST, handleCreatePin);
   server.on("/api/v1/pins", HTTP_DELETE, handleDeletePin);
   server.on("/api/v1/pins", HTTP_OPTIONS, opt);
+
+  server.on("/api/v1/wifi/status", HTTP_GET, handleWifiStatus);
+  server.on("/api/v1/wifi/status", HTTP_OPTIONS, opt);
+  server.on("/api/v1/wifi/scan", HTTP_GET, handleWifiScan);
+  server.on("/api/v1/wifi/scan", HTTP_OPTIONS, opt);
+  server.on("/api/v1/wifi/mode", HTTP_PUT, handleWifiMode);
+  server.on("/api/v1/wifi/mode", HTTP_POST, handleWifiMode);
+  server.on("/api/v1/wifi/mode", HTTP_OPTIONS, opt);
+  server.on("/api/v1/wifi/sta", HTTP_PUT, handleWifiSta);
+  server.on("/api/v1/wifi/sta", HTTP_POST, handleWifiSta);
+  server.on("/api/v1/wifi/sta", HTTP_OPTIONS, opt);
 }

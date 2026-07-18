@@ -80,12 +80,13 @@ Firmware mitigations (still use a solid 5V adapter):
 1. Plug the ESP32 into the wall USB adapter.  
 2. On your phone, join Wi‑Fi **GateBot** / **Star@918**.  
 3. **Visitors:** open **http://192.168.4.1/** and enter a 6-digit PIN to open the gate.  
-4. **Admin:** open **http://192.168.4.1/admin**, sign in, then:
+4. **Admin:** open **http://192.168.4.1/admin** (or LAN admin URL in Wi‑Fi mode), sign in, then:
    - Adjust home/press angles (saved to flash)
+   - **Network:** toggle AP vs Wi‑Fi, scan/connect, copy share or admin URL
    - Create / delete access PINs
    - Use **Open Gate** for a manual press  
 
-Full admin + PIN docs: [`admin-pin.md`](./admin-pin.md).
+Full admin + PIN docs: [`admin-pin.md`](./admin-pin.md) · Wi‑Fi modes: [`wifi-modes.md`](./wifi-modes.md) · Future WebSocket app: [`websocket-pin-webapp.md`](./websocket-pin-webapp.md).
 
 Serial (115200) still works while USB-serial is connected: `p`, `h`, `home=N`, `press=N`, `status`, `resetcfg`.
 

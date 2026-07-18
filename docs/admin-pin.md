@@ -27,10 +27,11 @@ Wrong PIN → error. After **5** failures → **30s** lockout.
 
 ## Admin flow
 
-1. Open http://192.168.4.1/admin
+1. Open http://192.168.4.1/admin (or the LAN admin URL in Wi‑Fi mode)
 2. Sign in with admin email/password
-3. **Settings** — same controls as before: Open Gate, Go Home, home/press sliders, factory reset
-4. **Access PINs** — create up to **10** PINs (6 digits + label); list/delete without revealing hashes
+3. **Settings** — Open Gate, Go Home, home/press sliders, factory reset
+4. **Network** — AP vs Wi‑Fi toggle, share link / scan & connect ([`wifi-modes.md`](./wifi-modes.md))
+5. **Access PINs** — create up to **10** PINs (6 digits + label); list/delete
 
 PINs are stored as SHA-256 hashes. The plain PIN is shown only once in the create response.
 

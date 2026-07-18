@@ -33,3 +33,8 @@
 
 #define SERVO_MIN_US 500
 #define SERVO_MAX_US 2400
+
+// --- Wi-Fi dual mode (AP vs STA client) ---
+#define WIFI_STA_TIMEOUT_MS 15000
+#define WIFI_SSID_MAX 32
+#define WIFI_PASS_MAX 64
