@@ -27,9 +27,9 @@ Defaults / factory fallbacks live in `firmware/include/config.h`. Once you chang
 
 1. ESP32 powers reliably from a wall USB adapter  
 2. SoftAP `GateBot` stays visible (no brownout reboot loop)  
-3. Web UI / API can command a press  
-4. Servo returns to home after each press  
-5. Travel calibrated for the apartment intercom Open button  
+3. Public PIN unlock page opens the gate  
+4. Admin panel for calibration + PIN management  
+5. Travel / settings persist across power-off (NVS)  
 
 ## Wiring
 
