@@ -10,7 +10,8 @@
 #define AP_CHANNEL 6
 #define AP_MAX_CLIENTS 4
 
-// --- Servo travel (degrees). Adjust via web UI or Serial. ---
+// --- Servo travel factory defaults (used only if NVS has no saved state) ---
+// Tuned values from the web UI are stored in flash and survive power-off.
 #define SERVO_HOME_ANGLE 40
 #define SERVO_PRESS_ANGLE 170
 

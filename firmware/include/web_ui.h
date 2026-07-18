@@ -97,11 +97,15 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
       <div><span class="dot" id="dot"></span><span id="conn">Connecting…</span></div>
       <div class="meta" id="angles">—</div>
     </div>
+    <p class="meta" id="persist" style="margin:-12px 0 18px;font-size:0.8rem;">—</p>
 
     <button class="open" id="btnOpen">Open Gate</button>
     <div class="row">
       <button class="btn" id="btnHome">Go Home</button>
       <button class="btn" id="btnRefresh">Refresh</button>
+    </div>
+    <div class="row" style="margin-bottom:24px;">
+      <button class="btn" id="btnReset" style="grid-column:1/-1;">Reset to factory angles</button>
     </div>
 
     <div class="field">
@@ -155,6 +159,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
       status() { return this.request('GET', '/status'); },
       getConfig() { return this.request('GET', '/config'); },
       setConfig(cfg) { return this.request('PUT', '/config', cfg); },
+      resetConfig() { return this.request('DELETE', '/config'); },
       openGate() { return this.request('POST', '/gate/open'); },
       goHome() { return this.request('POST', '/gate/home'); },
       setAngle(angle) { return this.request('POST', '/servo/angle', { angle }); }
@@ -168,11 +173,13 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
       btnOpen: document.getElementById('btnOpen'),
       btnHome: document.getElementById('btnHome'),
       btnRefresh: document.getElementById('btnRefresh'),
+      btnReset: document.getElementById('btnReset'),
       home: document.getElementById('home'),
       press: document.getElementById('press'),
       homeVal: document.getElementById('homeVal'),
       pressVal: document.getElementById('pressVal'),
       angles: document.getElementById('angles'),
+      persist: document.getElementById('persist'),
       conn: document.getElementById('conn'),
       dot: document.getElementById('dot')
     };
@@ -201,6 +208,11 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
       if (home != null && press != null) {
         els.angles.textContent = 'home ' + home + '° / press ' + press + '°';
       }
+      if (s.persisted === true) {
+        els.persist.textContent = 'Saved in flash — survives power-off';
+      } else if (s.persisted === false) {
+        els.persist.textContent = 'Factory defaults (not saved yet)';
+      }
     }
 
     async function refresh() {
@@ -208,7 +220,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
         const s = await GateBotAPI.status();
         applyConfig(s);
         setOnline(true);
-        setMsg('Synced via GET /api/v1/status', 'ok');
+        setMsg(s.persisted ? 'Loaded saved angles' : 'Using factory defaults', 'ok');
       } catch (e) {
         setOnline(false);
         setMsg(e.message, 'err');
@@ -248,7 +260,18 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
       try {
         const s = await GateBotAPI.setConfig({ homeAngle, pressAngle });
         applyConfig(s);
-        setMsg('Saved PUT /api/v1/config', 'ok');
+        setMsg('Saved to flash — will remember after power-off', 'ok');
+      } catch (e) {
+        setMsg(e.message, 'err');
+      }
+    }
+
+    async function resetConfig() {
+      if (!confirm('Reset to factory angles?')) return;
+      try {
+        const s = await GateBotAPI.resetConfig();
+        applyConfig(s);
+        setMsg('Factory defaults restored', 'ok');
       } catch (e) {
         setMsg(e.message, 'err');
       }
@@ -257,6 +280,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
     els.btnOpen.addEventListener('click', openGate);
     els.btnHome.addEventListener('click', goHome);
     els.btnRefresh.addEventListener('click', refresh);
+    els.btnReset.addEventListener('click', resetConfig);
     els.home.addEventListener('input', () => {
       els.homeVal.textContent = els.home.value + '°';
     });

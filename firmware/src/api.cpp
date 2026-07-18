@@ -41,16 +41,19 @@ String deviceStatusJson() {
   JsonDocument doc;
   doc["ok"] = true;
   doc["device"] = "gatebot";
-  doc["firmware"] = "2.0.0-local";
+  doc["firmware"] = "2.1.0-local";
   doc["mode"] = "softap";
   doc["ssid"] = AP_SSID;
   doc["ip"] = WiFi.softAPIP().toString();
   doc["busy"] = pressBusy;
+  doc["persisted"] = settingsFromNvs;
   doc["servo"]["pin"] = SERVO_PIN;
   doc["servo"]["angle"] = currentAngle;
   doc["servo"]["homeAngle"] = homeAngle;
   doc["servo"]["pressAngle"] = pressAngle;
   doc["servo"]["pressHoldMs"] = PRESS_HOLD_MS;
+  doc["factory"]["homeAngle"] = SERVO_HOME_ANGLE;
+  doc["factory"]["pressAngle"] = SERVO_PRESS_ANGLE;
   String out;
   serializeJson(doc, out);
   return out;
@@ -73,6 +76,7 @@ static void handleApiIndex() {
   endpoints.add("GET /api/v1/status");
   endpoints.add("GET /api/v1/config");
   endpoints.add("PUT /api/v1/config");
+  endpoints.add("DELETE /api/v1/config");
   endpoints.add("POST /api/v1/gate/open");
   endpoints.add("POST /api/v1/gate/home");
   endpoints.add("POST /api/v1/servo/angle");
@@ -101,6 +105,7 @@ static void handleGetConfig() {
   doc["homeAngle"] = homeAngle;
   doc["pressAngle"] = pressAngle;
   doc["angle"] = currentAngle;
+  doc["persisted"] = settingsFromNvs;
   String out;
   serializeJson(doc, out);
   sendJson(200, out);
@@ -173,12 +178,28 @@ static void handlePutConfig() {
   if (!doc["homeAngle"].isNull() || !doc["home"].isNull()) {
     moveServo(homeAngle);
   }
+  persistAngles();
 
   JsonDocument out;
   out["ok"] = true;
   out["homeAngle"] = homeAngle;
   out["pressAngle"] = pressAngle;
   out["angle"] = currentAngle;
+  out["persisted"] = settingsFromNvs;
+  String body;
+  serializeJson(out, body);
+  sendJson(200, body);
+}
+
+static void handleDeleteConfig() {
+  resetToFactoryDefaults();
+  JsonDocument out;
+  out["ok"] = true;
+  out["action"] = "reset";
+  out["homeAngle"] = homeAngle;
+  out["pressAngle"] = pressAngle;
+  out["angle"] = currentAngle;
+  out["persisted"] = settingsFromNvs;
   String body;
   serializeJson(out, body);
   sendJson(200, body);
@@ -264,6 +285,7 @@ void setupApiRoutes(WebServer& server) {
   server.on("/api/v1/config", HTTP_GET, handleGetConfig);
   server.on("/api/v1/config", HTTP_PUT, handlePutConfig);
   server.on("/api/v1/config", HTTP_POST, handlePutConfig);  // alias for simple clients
+  server.on("/api/v1/config", HTTP_DELETE, handleDeleteConfig);
   server.on("/api/v1/config", HTTP_OPTIONS, opt);
 
   server.on("/api/v1/gate/open", HTTP_POST, handleGateOpen);

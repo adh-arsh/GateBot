@@ -12,12 +12,15 @@ Same JSON API on SoftAP today and on home Wi‑Fi / React later.
 | GET | `/api/v1/health` | — | Liveness |
 | GET | `/api/v1/status` | — | Full device + servo state |
 | GET | `/api/v1/config` | — | `{ homeAngle, pressAngle, angle }` |
-| PUT | `/api/v1/config` | `{ "homeAngle": 90, "pressAngle": 70 }` | Update angles |
+| PUT | `/api/v1/config` | `{ "homeAngle": 40, "pressAngle": 170 }` | Update + **save to flash** |
+| DELETE | `/api/v1/config` | — | Clear saved settings → factory defaults |
 | POST | `/api/v1/gate/open` | — | Press sequence |
 | POST | `/api/v1/gate/home` | — | Move to home |
 | POST | `/api/v1/servo/angle` | `{ "angle": 85 }` | Absolute move 0–180 |
 
-All success responses include `"ok": true`. Errors: `"ok": false, "error": "..."`.
+Success responses include `"ok": true`. Config/status also include `"persisted": true|false` (whether values came from flash).
+
+Angles are stored in ESP32 NVS and survive power-off. Factory fallbacks are in `firmware/include/config.h`.
 
 CORS is enabled (`*`) so a future dashboard on another origin can call the device directly during local testing.
 

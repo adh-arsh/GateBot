@@ -12,19 +12,14 @@ This phase proves the mechanical press works without home Wi‑Fi. The ESP32 run
 | Charger | Samsung 5V / 2.4A (or any quality 5V / ≥1–2A USB adapter) |
 | Controller | ESP32 DevKit |
 | Servo | Tower Pro SG90 on **GPIO18** |
-| Home angle | **40°** |
-| Press angle | **170°** |
+| Home angle | Tunable (factory fallback **40°**; **saved in flash**) |
+| Press angle | Tunable (factory fallback **170°**; **saved in flash**) |
 | SoftAP SSID | `GateBot` |
 | SoftAP password | `Star@918` |
 | Control URL | http://192.168.4.1 |
 | API base | http://192.168.4.1/api/v1 |
 
-Defaults live in `firmware/include/config.h`:
-
-```c
-#define SERVO_HOME_ANGLE 40
-#define SERVO_PRESS_ANGLE 170
-```
+Defaults / factory fallbacks live in `firmware/include/config.h`. Once you change angles on the web UI (or via API), they are stored in ESP32 NVS flash and restored after power-off. Use **Reset to factory angles** (or `DELETE /api/v1/config`) to wipe saved values.
 
 ## Goals completed
 

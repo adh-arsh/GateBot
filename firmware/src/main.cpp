@@ -1,8 +1,7 @@
 /**
- * GateBot — Phase 2: SoftAP + API-driven web control
+ * GateBot — SoftAP + API + NVS-persisted calibration
  *
- * Power note: SG90 stall current can brown out USB-powered ESP32 boards.
- * SoftAP starts first; servo attaches only on command and detaches when idle.
+ * Home/press/last angles are saved to flash and restored after power-off.
  */
 
 #include <Arduino.h>
@@ -12,6 +11,7 @@
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 #include "config.h"
+#include "config_storage.h"
 #include "web_ui.h"
 #include "api.h"
 
@@ -21,9 +21,11 @@ WebServer server(80);
 int homeAngle = SERVO_HOME_ANGLE;
 int pressAngle = SERVO_PRESS_ANGLE;
 int currentAngle = SERVO_HOME_ANGLE;
+bool settingsFromNvs = false;
 bool sweepMode = false;
 bool pressBusy = false;
 bool servoAttached = false;
+bool angleDirty = false;  // flush last angle to NVS on detach
 
 unsigned long lastSweepMs = 0;
 unsigned long lastBlinkMs = 0;
@@ -58,9 +60,29 @@ void detachServoIfIdle() {
   if (millis() - lastServoActivityMs < SERVO_IDLE_DETACH_MS) return;
   gateServo.detach();
   servoAttached = false;
-  // Release pin so it isn't driving the signal line
   pinMode(SERVO_PIN, INPUT);
+  if (angleDirty) {
+    configStorageSaveLastAngle(currentAngle);
+    angleDirty = false;
+  }
   Serial.println("[servo] detached (idle)");
+}
+
+void persistAngles() {
+  configStorageSaveAngles(homeAngle, pressAngle);
+  configStorageSaveLastAngle(currentAngle);
+  settingsFromNvs = true;
+  angleDirty = false;
+}
+
+void resetToFactoryDefaults() {
+  configStorageClear();
+  homeAngle = SERVO_HOME_ANGLE;
+  pressAngle = SERVO_PRESS_ANGLE;
+  currentAngle = SERVO_HOME_ANGLE;
+  settingsFromNvs = false;
+  angleDirty = false;
+  Serial.printf("[nvs] factory home=%d press=%d\n", homeAngle, pressAngle);
 }
 
 void moveServo(int angle) {
@@ -68,6 +90,7 @@ void moveServo(int angle) {
   attachServoIfNeeded();
   currentAngle = angle;
   lastServoActivityMs = millis();
+  angleDirty = true;
   gateServo.write(angle);
   Serial.printf("[servo] angle=%d\n", angle);
 }
@@ -102,6 +125,8 @@ void servicePress() {
         pressState = PRESS_IDLE;
         pressBusy = false;
         lastServoActivityMs = millis();
+        configStorageSaveLastAngle(currentAngle);
+        angleDirty = false;
         Serial.println("[servo] PRESS sequence done");
       }
       break;
@@ -136,7 +161,6 @@ void setupAccessPoint() {
   WiFi.mode(WIFI_AP);
   WiFi.setSleep(false);
 
-  // Fixed AP IP so phones always reach the same address
   IPAddress apIP(192, 168, 4, 1);
   IPAddress gateway(192, 168, 4, 1);
   IPAddress subnet(255, 255, 255, 0);
@@ -153,25 +177,24 @@ void setupAccessPoint() {
 }
 
 void printStatus() {
-  Serial.println("---------- GateBot Phase 2 ----------");
+  Serial.println("---------- GateBot ----------");
   Serial.printf("  AP SSID    : %s\n", AP_SSID);
-  Serial.printf("  AP pass    : %s\n", AP_PASSWORD);
   Serial.printf("  AP IP      : %s\n", WiFi.softAPIP().toString().c_str());
   Serial.printf("  clients    : %d\n", WiFi.softAPgetStationNum());
   Serial.printf("  home angle : %d\n", homeAngle);
   Serial.printf("  press angle: %d\n", pressAngle);
+  Serial.printf("  last angle : %d\n", currentAngle);
+  Serial.printf("  settings   : %s\n", settingsFromNvs ? "saved (NVS)" : "factory");
   Serial.printf("  servo      : %s\n", servoAttached ? "attached" : "detached");
-  Serial.printf("  sweep mode : %s\n", sweepMode ? "ON" : "OFF");
   Serial.printf("  free heap  : %u bytes\n", ESP.getFreeHeap());
-  Serial.println("-------------------------------------");
+  Serial.println("--------------------------------");
 }
 
 void printHelp() {
   Serial.println();
-  Serial.println("Serial: h | p | s | home=N | press=N | status | help");
-  Serial.println("Web UI: connect to GateBot → http://192.168.4.1");
-  Serial.println("API:    http://192.168.4.1/api/v1");
-  Serial.println("Power:  use 5V wall USB (not weak laptop port); add 470uF near servo");
+  Serial.println("Serial: h | p | s | home=N | press=N | status | resetcfg | help");
+  Serial.println("Web UI: GateBot Wi‑Fi → http://192.168.4.1");
+  Serial.println("Angles persist across power-off (NVS flash).");
   Serial.println();
 }
 
@@ -192,9 +215,13 @@ void handleCommand(String cmd) {
     homeAngle = constrain(cmd.substring(5).toInt(), 0, 180);
     Serial.printf("[cfg] homeAngle=%d\n", homeAngle);
     moveServo(homeAngle);
+    persistAngles();
   } else if (cmd.startsWith("press=")) {
     pressAngle = constrain(cmd.substring(6).toInt(), 0, 180);
     Serial.printf("[cfg] pressAngle=%d\n", pressAngle);
+    persistAngles();
+  } else if (cmd == "resetcfg") {
+    resetToFactoryDefaults();
   } else if (cmd == "status") {
     printStatus();
   } else if (cmd == "help" || cmd == "?") {
@@ -220,7 +247,6 @@ void pollSerial() {
 }
 
 void setup() {
-  // Soft mitigation while USB power is weak; still use a proper 5V supply.
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
 
   Serial.begin(115200);
@@ -228,14 +254,20 @@ void setup() {
 
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
-  pinMode(SERVO_PIN, INPUT);  // do not drive servo until commanded
+  pinMode(SERVO_PIN, INPUT);
+
+  configStorageBegin();
+  GateBotSettings saved = configStorageLoad();
+  homeAngle = saved.homeAngle;
+  pressAngle = saved.pressAngle;
+  currentAngle = saved.lastAngle;
+  settingsFromNvs = saved.fromNvs;
 
   Serial.println();
   Serial.println("====================================");
-  Serial.println("  GateBot Phase 2 — API + SoftAP");
+  Serial.println("  GateBot — SoftAP + saved settings");
   Serial.println("====================================");
 
-  // Bring Wi‑Fi up BEFORE any servo current draw
   setupAccessPoint();
   setupWebServer();
 
@@ -248,7 +280,7 @@ void setup() {
 
   printStatus();
   printHelp();
-  Serial.println("[boot] ready — servo idle until Open Gate");
+  Serial.println("[boot] ready — last angles restored from flash if present");
 }
 
 void loop() {
